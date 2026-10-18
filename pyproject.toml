@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "halo-soundbar-service"
+version = "0.1.0"
+description = "Windows service for controlling Halo Soundbar Max ambient light power"
+requires-python = ">=3.12"
+dependencies = [
+    "hidapi==0.15.0",
+    "pywin32==305.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
