@@ -13,8 +13,99 @@ from halo_soundbar_service.protocol import (
     build_power_packet,
     build_query_packet,
     parse_frame,
+    parse_response_frame,
     style_fingerprint,
 )
+
+
+RAW_1 = bytes.fromhex(
+    "2FBBECE3002802010C0301FFE6FE64FF0201000064080300000064FF"
+    "04B476FF64FF0501000064FF06B139FF6408"
+    "000000000000000000000000000000000000"
+)
+RAW_2 = bytes.fromhex(
+    "2FBBECE3002802020C030700000064FF0800000064FF0901000064FF"
+    "0A00000064FF0B000001FFFF0C000001FFFF"
+    "000000000000000000000000000000000000"
+)
+
+
+def _response_frame(command, payload):
+    return (
+        b"\x2f\xbb\xec" + bytes((command,))
+        + len(payload).to_bytes(2, "big") + payload
+    ).ljust(64, b"\x00")
+
+
+@pytest.mark.parametrize("raw", [RAW_1, RAW_2])
+def test_parse_response_frame_accepts_exact_real_device_fixture(raw):
+    frame = parse_response_frame(raw)
+
+    assert frame == ParsedFrame(command=0xE3, payload=raw[6:46])
+    with pytest.raises(FrozenInstanceError):
+        frame.command = 0x6A
+
+
+def test_real_device_fixtures_collect_complete_ambient_state():
+    collector = AmbientStateCollector()
+
+    assert collector.feed(parse_response_frame(RAW_1)) is None
+    state = collector.feed(parse_response_frame(RAW_2))
+
+    assert state is not None
+    assert state.array_index == 0x0C
+    assert state.effect_id == 0x03
+    assert set(state.entries) == set(range(0x01, 0x0D))
+    assert state.entries[0x0B] == LightEntry(0x0B, 0, 0, 1, 255, 255)
+    assert state.entries[0x0C] == LightEntry(0x0C, 0, 0, 1, 255, 255)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("report_id", "header"), ("header", "header"),
+        ("host_header", "header"), ("length", "capacity"),
+        ("little_endian_length", "capacity"), ("truncation", "exactly 64"),
+        ("oversized_report", "exactly 64"),
+        ("payload_end_padding", "padding"), ("last_padding", "padding"),
+    ],
+)
+def test_parse_response_frame_rejects_malformed_real_fixture(mutation, reason):
+    report = bytearray(RAW_1)
+    if mutation == "report_id":
+        report[0] = 0x2E
+    elif mutation == "header":
+        report[1] = 0
+    elif mutation == "host_header":
+        report[:3] = bytes.fromhex("2EAAED")
+    elif mutation == "length":
+        report[4:6] = bytes.fromhex("003B")
+    elif mutation == "little_endian_length":
+        report[4:6] = bytes.fromhex("2800")
+    elif mutation == "truncation":
+        report.pop()
+    elif mutation == "oversized_report":
+        report.append(0)
+    elif mutation == "payload_end_padding":
+        report[46] = 1
+    else:
+        report[63] = 1
+
+    with pytest.raises(ProtocolError, match=reason):
+        parse_response_frame(bytes(report))
+
+
+@pytest.mark.parametrize("report", [bytearray(RAW_1), memoryview(RAW_1), None, "raw"])
+def test_parse_response_frame_requires_bytes(report):
+    with pytest.raises(ProtocolError, match="must be bytes"):
+        parse_response_frame(report)
+
+
+@pytest.mark.parametrize("payload", [b"", bytes(range(58))])
+def test_parse_response_frame_accepts_payload_capacity_boundaries_without_checksum(payload):
+    frame = parse_response_frame(_response_frame(0xFF, payload))
+
+    assert frame == ParsedFrame(command=0xFF, payload=payload)
 
 
 @pytest.mark.parametrize(
@@ -113,7 +204,7 @@ def _e3_packet(part_number, effect_id, indices, array_index=0x0C, total_parts=2)
         for index in indices
     )
     payload = bytes((total_parts, part_number, array_index, effect_id)) + entries
-    return parse_frame(build_frame(0xE3, payload))
+    return parse_response_frame(_response_frame(0xE3, payload))
 
 
 def test_collector_reassembles_two_e3_packets_out_of_order():

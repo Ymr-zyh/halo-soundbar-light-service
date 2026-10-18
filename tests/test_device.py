@@ -2,7 +2,26 @@ import pytest
 
 from fakes import FakeClock, FakeHidBackend, FakeHidHandle
 from halo_soundbar_service.device import DeviceClient, DeviceNotFoundError
-from halo_soundbar_service.protocol import ProtocolError, PowerTarget, build_frame
+from halo_soundbar_service.protocol import ProtocolError, PowerTarget
+
+
+RAW_1 = bytes.fromhex(
+    "2FBBECE3002802010C0301FFE6FE64FF0201000064080300000064FF"
+    "04B476FF64FF0501000064FF06B139FF6408"
+    "000000000000000000000000000000000000"
+)
+RAW_2 = bytes.fromhex(
+    "2FBBECE3002802020C030700000064FF0800000064FF0901000064FF"
+    "0A00000064FF0B000001FFFF0C000001FFFF"
+    "000000000000000000000000000000000000"
+)
+
+
+def _response_frame(command, payload):
+    return (
+        b"\x2f\xbb\xec" + bytes((command,))
+        + len(payload).to_bytes(2, "big") + payload
+    ).ljust(64, b"\x00")
 
 
 def _identity(path=b"halo", **overrides):
@@ -40,7 +59,7 @@ def test_connect_ignores_wrong_pid_interface_usage_and_product():
 
 def _state_frames(effect=7):
     return [
-        build_frame(
+        _response_frame(
             0xE3,
             bytes((2, part, 0x0C, effect))
             + b"".join(bytes((index, 1, 2, 3, 0xFF, 0xFF)) for index in indices),
@@ -59,10 +78,23 @@ def session():
     assert handle.closed
 
 
+def test_query_accepts_exact_real_device_fixtures(session):
+    client, handle, _ = session
+    handle.query_responses.append([RAW_1, RAW_2])
+
+    state = client.query_state()
+
+    assert state.array_index == 0x0C
+    assert state.effect_id == 0x03
+    assert set(state.entries) == set(range(0x01, 0x0D))
+    assert state.entries[0x0B].blue == state.entries[0x0C].blue == 1
+    assert handle.writes == [bytes.fromhex("2EAAED6A000001") + bytes(57)]
+
+
 def test_query_drains_ack_and_stale_packets_then_collects_current_e3_pair(session):
     client, handle, _ = session
-    handle.reads.extend([build_frame(0x6B, b""), *_state_frames(2)])
-    handle.query_responses.append([build_frame(0x6A, b""), *_state_frames(9)[::-1]])
+    handle.reads.extend([_response_frame(0x6B, b""), *_state_frames(2)])
+    handle.query_responses.append([_response_frame(0x6A, b""), *_state_frames(9)[::-1]])
 
     state = client.query_state()
 
@@ -167,13 +199,27 @@ def test_query_rejects_a_drain_that_never_reaches_empty(session):
     assert handle.writes == []
 
 
-def test_query_keeps_malformed_frame_reason_when_deadline_expires(session):
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [("truncation", "exactly 64"), ("header", "header"),
+     ("length", "capacity"), ("padding", "padding")],
+)
+def test_query_keeps_malformed_frame_reason_when_deadline_expires(session, mutation, reason):
     from halo_soundbar_service.device import DeviceProtocolError
 
     client, handle, _ = session
-    handle.query_responses.append([b"bad"])
+    report = bytearray(RAW_1)
+    if mutation == "truncation":
+        report.pop()
+    elif mutation == "header":
+        report[0] = 0
+    elif mutation == "length":
+        report[4:6] = bytes.fromhex("003B")
+    else:
+        report[46] = 1
+    handle.query_responses.append([bytes(report)])
 
-    with pytest.raises(DeviceProtocolError, match="exactly 64") as caught:
+    with pytest.raises(DeviceProtocolError, match=reason) as caught:
         client.query_state(timeout_ms=80)
 
     assert isinstance(caught.value.__cause__, ProtocolError)

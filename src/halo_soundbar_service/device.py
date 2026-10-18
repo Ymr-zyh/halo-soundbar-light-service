@@ -12,7 +12,7 @@ from .protocol import (
     ProtocolError,
     build_power_packet,
     build_query_packet,
-    parse_frame,
+    parse_response_frame,
 )
 
 
@@ -174,7 +174,7 @@ class DeviceClient:
             if not report:
                 continue
             try:
-                state = collector.feed(parse_frame(report))
+                state = collector.feed(parse_response_frame(report))
             except ProtocolError as error:
                 last_error = error
                 continue

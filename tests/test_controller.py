@@ -9,7 +9,7 @@ from halo_soundbar_service.device import (
     AmbiguousDeviceError, DeviceClient, DeviceNotFoundError, DeviceProtocolError,
     ReadTimeoutError,
 )
-from halo_soundbar_service.protocol import AmbientState, LightEntry, ProtocolError, build_frame
+from halo_soundbar_service.protocol import AmbientState, LightEntry, ProtocolError
 
 
 def state(main=1, sub=1, effect=7):
@@ -19,9 +19,16 @@ def state(main=1, sub=1, effect=7):
     return AmbientState(0x0C, effect, entries)
 
 
+def _response_frame(command, payload):
+    return (
+        b"\x2f\xbb\xec" + bytes((command,))
+        + len(payload).to_bytes(2, "big") + payload
+    ).ljust(64, b"\x00")
+
+
 def frames(snapshot):
     return [
-        build_frame(
+        _response_frame(
             0xE3,
             bytes((2, part, snapshot.array_index, snapshot.effect_id))
             + b"".join(

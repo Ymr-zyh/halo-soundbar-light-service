@@ -1,4 +1,4 @@
-"""Constrained HID frame encoding and generic frame validation."""
+"""Constrained HID host frame encoding and device response validation."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -160,6 +160,7 @@ def build_power_packet(target: PowerTarget, enabled: bool) -> bytes:
 
 
 def parse_frame(report: bytes) -> ParsedFrame:
+    """Validate a host frame, including its additive checksum."""
     if not isinstance(report, bytes):
         raise ProtocolError("report must be bytes")
     if len(report) != REPORT_SIZE:
@@ -181,3 +182,21 @@ def parse_frame(report: bytes) -> ParsedFrame:
     return ParsedFrame(command=report[3], payload=report[6:checksum_index])
 
 
+def parse_response_frame(report: bytes) -> ParsedFrame:
+    """Parse the verified device response layout without a host checksum."""
+    if not isinstance(report, bytes):
+        raise ProtocolError("report must be bytes")
+    if len(report) != REPORT_SIZE:
+        raise ProtocolError(f"report must be exactly {REPORT_SIZE} bytes")
+    if report[:3] != b"\x2f\xbb\xec":
+        raise ProtocolError("invalid report header")
+
+    payload_length = int.from_bytes(report[4:6], byteorder="big")
+    if payload_length > REPORT_SIZE - 6:
+        raise ProtocolError("declared payload length exceeds report capacity")
+
+    payload_end = 6 + payload_length
+    if any(report[payload_end:]):
+        raise ProtocolError("report padding must be zero")
+
+    return ParsedFrame(command=report[3], payload=report[6:payload_end])
