@@ -104,8 +104,8 @@ def test_admin_scripts_restrict_target_and_fail_closed(name):
     else:
         assert "& $InstalledExe uninstall" in script
         assert "Remove-Item -LiteralPath $InstalledExe -Force" in script
-        assert "Remove-Item -LiteralPath $InstallDirectory -Force" in script
-        assert "Remove-Item -LiteralPath $InstallDirectory -Recurse" not in script
+        assert "[IO.Directory]::Delete($InstallDirectory, $false)" in script
+        assert "Remove-Item -LiteralPath $InstallDirectory" not in script
         assert script.index("& $InstalledExe uninstall") < script.index("$LASTEXITCODE -ne 0")
         assert script.index("$LASTEXITCODE -ne 0") < script.index("Remove-Item")
         assert "Service still exists; installation files were preserved." in script

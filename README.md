@@ -164,7 +164,7 @@ if (($Directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw 'Refusing an installation reparse point; files were preserved.'
 }
 Remove-Item -LiteralPath $InstalledExe -Force
-Remove-Item -LiteralPath $InstallDirectory -Force
+[IO.Directory]::Delete($InstallDirectory, $false)
 ```
 
 两种方式均保留 `%ProgramData%\HaloSoundbarLightService` 下的日志。本次仅审阅卸载逻辑并检查脚本语法，没有实际卸载；已验证服务保留运行。

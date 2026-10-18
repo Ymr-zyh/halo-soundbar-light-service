@@ -73,7 +73,7 @@ try {
         throw 'Installed EXE changed into a reparse point; files were preserved.'
     }
     Remove-Item -LiteralPath $InstalledExe -Force
-    Remove-Item -LiteralPath $InstallDirectory -Force
+    [IO.Directory]::Delete($InstallDirectory, $false)
     Write-Output 'Service and installation directory removed.'
 }
 catch {
