@@ -148,17 +148,27 @@ class DeviceClient:
         return max_reads
 
     def query_state(self, timeout_ms: int = 800) -> AmbientState:
+        """Drain and collect a snapshot within one shared read-time budget."""
         self._require_open()
         if type(timeout_ms) is not int or timeout_ms <= 0:
             raise ValueError("timeout_ms must be a positive integer")
-        if self.drain() == 64:
+        deadline = self._monotonic() + timeout_ms / 1000
+        for _ in range(64):
+            remaining_ms = int((deadline - self._monotonic()) * 1000)
+            if remaining_ms < 1:
+                raise ReadTimeoutError("No complete ambient state before deadline during drain")
+            report = self._handle.read(REPORT_SIZE, min(10, remaining_ms))
+            if self._monotonic() >= deadline:
+                raise ReadTimeoutError("No complete ambient state before deadline during drain")
+            if not report:
+                break
+        else:
             raise DeviceProtocolError("drain limit reached before an empty read")
         self._write_packet(build_query_packet())
         collector = AmbientStateCollector()
-        deadline = self._monotonic() + timeout_ms / 1000
         last_error: ProtocolError | None = None
-        while (remaining := deadline - self._monotonic()) > 0:
-            report = self._handle.read(REPORT_SIZE, max(1, min(50, int(remaining * 1000))))
+        while (remaining_ms := int((deadline - self._monotonic()) * 1000)) > 0:
+            report = self._handle.read(REPORT_SIZE, min(50, remaining_ms))
             if self._monotonic() >= deadline:
                 break
             if not report:

@@ -85,6 +85,53 @@ def test_query_times_out_without_complete_pair(session):
     assert all(0 < timeout <= 80 for _, timeout in handle.read_calls)
 
 
+def test_query_default_budget_includes_draining_63_stale_packets(session):
+    from halo_soundbar_service.device import ReadTimeoutError
+
+    client, handle, clock = session
+    handle.reads.extend([b"stale"] * 63)
+
+    with pytest.raises(ReadTimeoutError):
+        client.query_state()
+
+    assert clock.now <= 0.8
+    assert len(handle.writes) == 1
+
+
+def test_query_drain_exhausts_shared_budget_without_sending_query(session):
+    from halo_soundbar_service.device import ReadTimeoutError
+
+    client, handle, clock = session
+    handle.reads.extend([b"stale"] * 63)
+
+    with pytest.raises(ReadTimeoutError):
+        client.query_state(timeout_ms=25)
+
+    assert clock.now <= 0.025
+    assert len(handle.read_calls) <= 3
+    assert handle.writes == []
+
+
+def test_query_does_not_send_query_after_drain_read_returns_late(session, monkeypatch):
+    from halo_soundbar_service.device import ReadTimeoutError
+
+    client, handle, clock = session
+    original_read = handle.read
+
+    def late_empty_read(size, timeout_ms):
+        result = original_read(size, timeout_ms)
+        clock.advance(0.1)
+        return result
+
+    monkeypatch.setattr(handle, "read", late_empty_read)
+
+    with pytest.raises(ReadTimeoutError):
+        client.query_state(timeout_ms=80)
+
+    assert len(handle.read_calls) == 1
+    assert handle.writes == []
+
+
 def test_each_query_has_a_new_collector(session):
     from halo_soundbar_service.device import ReadTimeoutError
 

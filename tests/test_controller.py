@@ -177,6 +177,21 @@ def test_deadline_stops_retry_without_extra_write():
     ]
 
 
+@pytest.mark.parametrize("responds", [False, True])
+def test_stale_backlog_query_is_bounded_and_never_writes_past_controller_deadline(responds):
+    controller, handle, clock = setup_controller(*([state()] if responds else []))
+    handle.reads.extend([b"stale"] * 63)
+
+    result = controller.set_power(False, deadline=0.1)
+
+    assert result.status is (OperationStatus.DEADLINE_EXCEEDED if responds
+                            else OperationStatus.DEVICE_UNAVAILABLE)
+    assert 0.1 < clock.now <= 0.8
+    assert result.attempts == 0
+    assert calls(handle) == [("query_state",)]
+    assert handle.closed
+
+
 @pytest.mark.parametrize("reason", ["cancel", "deadline"])
 def test_stop_before_start_never_opens_a_device(reason):
     event = Event()
