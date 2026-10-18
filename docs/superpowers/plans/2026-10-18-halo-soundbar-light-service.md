@@ -6,7 +6,7 @@
 
 **Architecture:** 将 HID 协议、设备访问、开关事务和 Windows Service 生命周期分成独立模块；协议与事务层通过注入式后端测试，Windows 适配层保持薄封装。所有写入前后均执行严格设备识别和状态查询，以最终状态而非 ACK 判断成功。
 
-**Tech Stack:** Python 3.12.7、pywin32 305.1、hidapi 0.15.0、pytest 7.4.4、PyInstaller 6.20.0、PowerShell 5.1+
+**Tech Stack:** Python 3.12.7、pywin32 312、hidapi 0.15.0、pytest 7.4.4、PyInstaller 6.20.0、PowerShell 5.1+
 
 **Spec:** `docs/superpowers/specs/2026-10-18-halo-soundbar-light-service-design.md`
 
@@ -14,7 +14,7 @@
 
 - 仅支持 VID `0x2D99`、PID `0xA073`、接口 `4`、Usage Page `0xFF14`、Usage `0x0001`、产品名 `EDIFIER Halo Soundbar Max`。
 - 仅允许命令 `0x6A` 查询，以及针对灯组 `0x0C`、开关索引 `0x0B`/`0x0C` 的固定 `0x6B` 开关写入。
-- 报告固定 64 字节；校验和为从 `0xAA` 到载荷末尾的字节和模 256。
+- 报告固定 64 字节；`2E AA ED` 主机发送帧的校验和为从 `0xAA` 到载荷末尾的字节和模 256；`2F BB EC` 设备响应无该校验和，需校验声明长度和载荷后全零填充。
 - 写入前必须完成协议探测；身份、灯组、条目结构或状态值不符合预期时不得写入。
 - 启动设备枚举重试总计不超过 120 秒；PRESHUTDOWN 配置 15000 ms，内部关灯使用约 12 秒的尽力预算。不可取消的原生 HID 调用卡死时，SCM 的 15 秒超时是保证 Windows 继续关机的系统硬兜底。
 - 手动 STOP 不改变灯光；PRESHUTDOWN 和 SHUTDOWN 执行幂等关灯。
@@ -73,7 +73,7 @@ README.md                              使用、诊断、安装、回滚和验�
 
 **Interfaces:**
 - Consumes: 无。
-- Produces: `PowerTarget`、`ProtocolError`、`ParsedFrame`、`LightEntry`、`AmbientState`；`build_frame(command: int, payload: bytes) -> bytes`；`build_query_packet() -> bytes`；`build_power_packet(target: PowerTarget, enabled: bool) -> bytes`；`parse_frame(report: bytes) -> ParsedFrame`。
+- Produces: `PowerTarget`、`ProtocolError`、`ParsedFrame`、`LightEntry`、`AmbientState`；`build_frame(command: int, payload: bytes) -> bytes`；`build_query_packet() -> bytes`；`build_power_packet(target: PowerTarget, enabled: bool) -> bytes`；`parse_frame(report: bytes) -> ParsedFrame`；`parse_response_frame(report: bytes) -> ParsedFrame`。
 
 - [ ] **Step 1: 写四条固定开关帧和查询帧的失败测试**
 
@@ -90,7 +90,7 @@ README.md                              使用、诊断、安装、回滚和验�
 
 - [ ] **Step 4: 添加并实现基础帧解析验证**
 
-  先添加 `test_parse_frame_rejects_bad_header_length_checksum_and_truncation`，确认失败；再实现 `parse_frame`，只负责通用帧头、声明长度和校验和检查并返回不可变 `ParsedFrame(command: int, payload: bytes)`。
+  先添加 `test_parse_frame_rejects_bad_header_length_checksum_and_truncation`，确认失败；再实现 `parse_frame`，负责 `2E AA ED` 主机帧的帧头、声明长度和校验和检查。根据后续真机证据增加 `parse_response_frame`，负责无主机校验和的 `2F BB EC` 设备响应帧长度和全零填充检查；两者均返回不可变 `ParsedFrame(command: int, payload: bytes)`。
 
 - [ ] **Step 5: 运行本任务测试**
 
@@ -111,7 +111,7 @@ README.md                              使用、诊断、安装、回滚和验�
 - Modify: `tests/test_protocol.py`
 
 **Interfaces:**
-- Consumes: Task 1 的 `parse_frame`、`ParsedFrame`、`LightEntry`、`AmbientState`。
+- Consumes: Task 1 的 `parse_response_frame`、`ParsedFrame`、`LightEntry`、`AmbientState`。
 - Produces: `AmbientStateCollector(expected_array_index: int = 0x0C)`；`feed(frame: ParsedFrame) -> AmbientState | None`；`reset() -> None`；`style_fingerprint(state: AmbientState) -> tuple[int, tuple[LightEntry, ...]]`。
 
 - [ ] **Step 1: 写有效两分包重组失败测试**
@@ -151,7 +151,7 @@ README.md                              使用、诊断、安装、回滚和验�
 - Create: `tests/test_device.py`
 
 **Interfaces:**
-- Consumes: Task 1/2 的 `build_query_packet`、`build_power_packet`、`parse_frame`、`AmbientStateCollector`、`AmbientState`、`PowerTarget`。
+- Consumes: Task 1/2 的 `build_query_packet`、`build_power_packet`、`parse_response_frame`、`AmbientStateCollector`、`AmbientState`、`PowerTarget`。
 - Produces: `DeviceNotFoundError`、`AmbiguousDeviceError`、`DeviceProtocolError`、`ReadTimeoutError`；`HidBackend` Protocol；`DeviceClient.connect(backend: HidBackend, monotonic: Callable[[], float]) -> DeviceClient`；上下文管理；`drain(max_reads: int = 64, read_timeout_ms: int = 10) -> int`；`query_state(timeout_ms: int = 800) -> AmbientState`；`write_power(target: PowerTarget, enabled: bool) -> None`。
 
 - [ ] **Step 1: 写严格身份筛选失败测试**
