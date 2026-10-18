@@ -68,7 +68,7 @@ print('style_fingerprint:', style_fingerprint(state))
 $LASTEXITCODE
 ```
 
-2026-10-18 本地验证：修复设备响应帧解析后，266 个自动化测试通过，清洁构建与 SHA-256 核对成功；真实设备唯一严格匹配，打包 EXE 完成 `1/1 → 0/0 → 1/1` 开关往返，三次完整快照的效果编号与 `0x01..0x0A` 全条目逐字节相同，最终两路亮灯已读回确认。随后尝试安装时，执行环境没有管理员令牌，安装脚本退出 `1`；服务未注册，SCM、等效 PRESHUTDOWN 与真实关机/下次启动行为尚未验收。最终只读核验仍为 `1/1` 且样式不变。详见 [本地验证记录](docs/verification/2026-10-18-local-verification.md)。
+2026-10-18 本地验证通过：266 个自动化测试、打包 EXE 真实设备开关往返、标准 UAC 管理员安装、SCM 配置、服务启动开灯、手动 STOP 保持灯光，以及不关机的等效 `SvcOtherEx(15, 0, None)` 关灯路径。最终服务 `RUNNING`、Automatic、LocalSystem，两路灯光 `1/1`；各阶段完整快照的效果编号与 `0x01..0x0A` 全条目逐字节相同。初次非管理员令牌的安装阻塞已由标准 UAC 解决；真实关机与下次系统启动尚未验收。详见 [本地验证记录](docs/verification/2026-10-18-local-verification.md)。
 
 四条交互诊断命令如下；`off`、`on` 会实际改灯。
 
@@ -142,6 +142,6 @@ if (($Directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
 Remove-Item -LiteralPath $InstallDirectory -Recurse -Force
 ```
 
-两种方式均保留 `%ProgramData%\HaloSoundbarLightService` 下的日志。本次仅审阅卸载逻辑并检查脚本语法，没有实际卸载；安装与等效控制验收受管理员权限阻塞。
+两种方式均保留 `%ProgramData%\HaloSoundbarLightService` 下的日志。本次仅审阅卸载逻辑并检查脚本语法，没有实际卸载；已验证服务保留运行。
 
 升级或回滚前保留已验证的旧 EXE 与 SHA-256：先卸载，再用 `install.ps1 -SourceExe` 安装目标版本，重新执行 probe/off/on 验证。真实关机与下一次启动的灯光行为须在人明确同意、保存工作后单独验收；单测通过不等于完成硬件或关机验收。
