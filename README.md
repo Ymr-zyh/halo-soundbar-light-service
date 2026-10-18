@@ -51,6 +51,25 @@ python -m pytest -v --basetemp .\build\pytest
 .\dist\HaloSoundbarLightService.exe on
 ```
 
+每次改变电源后再次执行 `probe` 并检查 `$LASTEXITCODE`：关闭后主音箱与低音炮都应为 `OFF`，重新打开后都应为 `ON`。若初次 `probe` 失败，不要执行 `off`。若关闭后的核验或重新打开失败，应优先有限重试 `on` 恢复亮灯，再排查失败原因。
+
+完整样式不变性验收还需在写入前、关闭后和打开后，通过项目虚拟环境调用现有只读 API，比较效果编号及 `0x01..0x0A` 每个条目的全部六字节；CLI 的 `probe` 摘要本身不能证明样式未变：
+
+```powershell
+@'
+import sys
+sys.path.insert(0, 'src')
+from halo_soundbar_service.service import build_controller
+from halo_soundbar_service.protocol import style_fingerprint
+state = build_controller().probe()
+print('AmbientState:', state)
+print('style_fingerprint:', style_fingerprint(state))
+'@ | .\.venv\Scripts\python.exe -
+$LASTEXITCODE
+```
+
+2026-10-18 本地验证：244 个自动化测试通过，清洁构建生成 EXE 与校验文件；真实设备身份唯一匹配，但 EXE 和源码只读探测均在协议报文头校验失败，因此没有执行灯光写入，硬件往返和样式不变性尚未通过验收。详见 [本地验证记录](docs/verification/2026-10-18-local-verification.md)。
+
 四条交互诊断命令如下；`off`、`on` 会实际改灯。
 
 | 命令 | 行为 |
