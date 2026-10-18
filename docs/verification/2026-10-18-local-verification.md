@@ -113,7 +113,7 @@ FINAL_RECOVERY: BOTH_ON_VERIFIED; emergency recovery not needed
 
 早先基于 `5a9984b` 的构建通过 244 个测试，但把发送帧 `2E AA ED` 用于解析真实接收帧 `2F BB EC`，导致 probe 返回 `invalid report header`；当时没有执行 off/on。根因调查取得独立原始 E3 报文，修复提交 `6f3409b` 将设备响应解析与主机发送校验分离，并增加真机字节 fixture 回归。本记录以修复后的重新构建和成功硬件往返作为最终结果，旧失败证据保留于任务报告。
 
-上述 Task 9 阶段最终两路已恢复并读回为 `1/1`，证明打包交互命令与本次样式不变性。后续 Task 10 的服务验收见下一节；真实关机与下一次系统启动仍未验收。
+上述 Task 9 阶段最终两路已恢复并读回为 `1/1`，证明打包交互命令与本次样式不变性。后续 Task 10 的服务验收和 Task 11 的真实关机/开机验收见下文；本段仅记录 Task 9 当时的范围。
 
 ## Task 10：管理员安装与等效 PRESHUTDOWN 验证
 
@@ -220,5 +220,7 @@ Windows Application 事件日志也实际读到三条 Event ID `255`：`19:29:05
 2026-10-18 19:48:41,325 INFO preshutdown: status=SUCCESS attempts=1 detail=
 2026-10-18 19:49:42,118 INFO startup: status=SUCCESS attempts=1 detail=
 ```
+
+Windows Application 事件日志的独立读回也存在同一对 Event ID `255`，Provider 均为 `HaloSoundbarLightService`：`19:48:41.328 +08:00` 的 message 为 `preshutdown: status=SUCCESS attempts=1`，`19:49:42.122 +08:00` 的 message 为 `startup: status=SUCCESS attempts=1`。事件日志与文件日志的时间、状态和尝试次数一致。
 
 关机过程未观察到异常阻塞；`preshutdown` 成功记录发生在系统停机前，下次启动的 `startup` 成功记录与服务自动运行、硬件 `1/1` 读回相互佐证。此阶段未执行卸载、样式写入或 TempoHub 操作。最终服务保持 `Running`，两路灯保持开启。
