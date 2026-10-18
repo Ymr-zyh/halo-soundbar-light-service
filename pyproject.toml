@@ -9,7 +9,7 @@ description = "Windows service for controlling Halo Soundbar Max ambient light p
 requires-python = ">=3.12"
 dependencies = [
     "hidapi==0.15.0",
-    "pywin32==305.1",
+    "pywin32==312",
 ]
 
 [tool.setuptools.packages.find]

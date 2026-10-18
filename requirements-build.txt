@@ -1,4 +1,4 @@
 hidapi==0.15.0
-pywin32==305.1
+pywin32==312
 pytest==7.4.4
 pyinstaller==6.20.0
