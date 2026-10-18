@@ -1,6 +1,7 @@
 """Lifecycle scheduling tests use controlled controller I/O and monotonic time."""
 
 from threading import Event, Thread
+from time import monotonic
 
 import pytest
 
@@ -163,7 +164,13 @@ def workers():
     assert errors == []
 
 
-def test_preshutdown_cancels_startup_then_runs_one_off_transaction_without_deadlock(workers):
+@pytest.mark.parametrize("finished_at, expected_status, expected_calls", [
+    (37.0, OperationStatus.SUCCESS, [(True, 150.0), (False, 42.0)]),
+    (42.0, OperationStatus.DEADLINE_EXCEEDED, [(True, 150.0)]),
+])
+def test_preshutdown_cancels_startup_then_runs_one_off_transaction_without_deadlock(
+    workers, finished_at, expected_status, expected_calls
+):
     gate, spawn = workers
     entered, release, off_started = gate(), gate(), gate()
     stop, clock = gate(), Clock()
@@ -173,7 +180,7 @@ def test_preshutdown_cancels_startup_then_runs_one_off_transaction_without_deadl
             entered.set()
             assert cancel_event.wait(2)
             assert release.wait(2)
-            clock.now = 47.0
+            clock.now = finished_at
             return result(OperationStatus.DEVICE_UNAVAILABLE)
         off_started.set()
         assert cancel_event is None
@@ -192,10 +199,49 @@ def test_preshutdown_cancels_startup_then_runs_one_off_transaction_without_deadl
     shutdown.join(2)
 
     assert startup_results[0].status is OperationStatus.CANCELLED
-    assert shutdown_results[0].status is OperationStatus.SUCCESS
-    assert [call[:2] for call in factory.calls] == [(True, 150.0), (False, 59.0)]
-    assert len(factory.instances) == 2
+    assert shutdown_results[0].status is expected_status
+    assert [call[:2] for call in factory.calls] == expected_calls
+    assert len(factory.instances) == len(expected_calls)
     assert clock.waits == []
+
+
+def test_preshutdown_wait_exhausts_budget_and_shares_timeout_without_running_off(workers):
+    gate, spawn = workers
+    entered, release, stop = gate(), gate(), gate()
+
+    def transaction(enabled, deadline, cancel_event):
+        if enabled:
+            entered.set()
+            assert release.wait(2)
+            return result(OperationStatus.CANCELLED)
+        return result()
+
+    factory = Controllers(transaction)
+    lifecycle = ServiceLifecycle(factory, stop, monotonic, stop.wait)
+    startup, startup_results = spawn(lifecycle.run_startup)
+    assert entered.wait(2)
+    shutdowns = [spawn(lambda: lifecycle.handle_preshutdown(budget_s=0.25))]
+    assert stop.wait(2)
+    shutdowns += [spawn(lifecycle.handle_preshutdown), spawn(lifecycle.handle_shutdown)]
+
+    for thread, outcomes in shutdowns:
+        thread.join(0.75)
+        assert not thread.is_alive(), "Shutdown waited beyond its budget for startup"
+        assert outcomes[0].status is OperationStatus.DEADLINE_EXCEEDED
+    shared = shutdowns[0][1][0]
+    assert all(outcomes[0] is shared for _, outcomes in shutdowns)
+    assert shared.attempts == 0
+    assert shared.before is None and shared.after is None
+    assert shared.detail
+    assert startup.is_alive()
+    assert [call[0] for call in factory.calls] == [True]
+    assert lifecycle.handle_shutdown() is shared
+
+    release.set()
+    startup.join(2)
+    assert startup_results[0].status is OperationStatus.CANCELLED
+    assert lifecycle.handle_preshutdown() is shared
+    assert [call[0] for call in factory.calls] == [True]
 
 
 def test_preshutdown_interrupts_retry_wait_and_prevents_another_on_transaction(workers):

@@ -81,7 +81,8 @@ class ServiceLifecycle:
             self._condition.notify_all()
 
     def handle_preshutdown(self, budget_s: float = 12.0) -> OperationResult:
-        """Cancel startup first, then perform exactly one uncancelled off call."""
+        """Cancel startup and perform at most one off call within one budget."""
+        deadline = self._monotonic() + budget_s
         with self._condition:
             if self._shutdown_requested:
                 while self._shutdown_result is None and self._shutdown_error is None:
@@ -92,12 +93,21 @@ class ServiceLifecycle:
             self._shutdown_requested = True
             self._stop_event.set()
             self._condition.notify_all()
-            while self._transaction_active:
-                self._condition.wait()
+            while True:
+                remaining = deadline - self._monotonic()
+                if remaining <= 0:
+                    self._shutdown_result = OperationResult(
+                        OperationStatus.DEADLINE_EXCEEDED, 0, None, None,
+                        "Shutdown budget expired before the off transaction could start",
+                    )
+                    self._condition.notify_all()
+                    return self._shutdown_result
+                if not self._transaction_active:
+                    break
+                self._condition.wait(remaining)
             self._transaction_active = True
 
         try:
-            deadline = self._monotonic() + budget_s
             outcome = self._controller_factory().set_power(
                 False, deadline, cancel_event=None
             )
