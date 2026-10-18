@@ -53,6 +53,82 @@ class AmbientState:
         object.__setattr__(self, "entries", MappingProxyType(dict(self.entries)))
 
 
+class AmbientStateCollector:
+    """Reassemble the two-part ambient state response without mixing generations."""
+
+    def __init__(self, expected_array_index: int = ARRAY_INDEX) -> None:
+        self.expected_array_index = expected_array_index
+        self.reset()
+
+    def reset(self) -> None:
+        self._effect_id: int | None = None
+        self._array_index: int | None = None
+        self._parts: dict[int, dict[int, LightEntry]] = {}
+        self._has_part_one = False
+
+    def feed(self, frame: ParsedFrame) -> AmbientState | None:
+        if frame.command != 0xE3:
+            return None
+        if len(frame.payload) < 4:
+            raise ProtocolError("ambient state payload must include its four-byte header")
+
+        total_parts, part_number, array_index, effect_id = frame.payload[:4]
+        records = frame.payload[4:]
+        if total_parts != 2:
+            raise ProtocolError("ambient state must contain exactly two parts")
+        if part_number not in (1, 2):
+            raise ProtocolError("ambient state part number must be 1 or 2")
+        if array_index != self.expected_array_index:
+            raise ProtocolError("ambient state array index does not match the expected array")
+        if len(records) % 6:
+            raise ProtocolError("ambient state entries must be six bytes each")
+
+        entries: dict[int, LightEntry] = {}
+        for offset in range(0, len(records), 6):
+            index, red, green, blue, brightness, speed = records[offset : offset + 6]
+            if index in entries:
+                raise ProtocolError(f"duplicate ambient state entry index {index:#04x}")
+            entries[index] = LightEntry(index, red, green, blue, brightness, speed)
+
+        if part_number == 1:
+            if self._has_part_one:
+                self.reset()
+            elif self._effect_id is not None and self._effect_id != effect_id:
+                self.reset()
+            self._effect_id = effect_id
+            self._array_index = array_index
+            self._has_part_one = True
+        elif self._effect_id is None:
+            self._effect_id = effect_id
+            self._array_index = array_index
+        elif self._effect_id != effect_id or self._array_index != array_index:
+            return None
+
+        existing_indices = {
+            index for part_entries in self._parts.values() for index in part_entries
+        }
+        if existing_indices.intersection(entries):
+            raise ProtocolError("duplicate ambient state entry index across parts")
+        self._parts[part_number] = entries
+
+        if not self._has_part_one or set(self._parts) != {1, 2}:
+            return None
+
+        combined = {**self._parts[1], **self._parts[2]}
+        state = AmbientState(
+            array_index=self._array_index,
+            effect_id=self._effect_id,
+            entries=combined,
+        )
+        self.reset()
+        return state
+
+
+def style_fingerprint(state: AmbientState) -> tuple[int, tuple[LightEntry, ...]]:
+    """Return the style identity, excluding the two switch-only array entries."""
+    return state.effect_id, tuple(state.entries[index] for index in range(0x01, 0x0B))
+
+
 def build_frame(command: int, payload: bytes) -> bytes:
     """Build a zero-padded 64-byte report with an 8-bit additive checksum."""
     if isinstance(command, bool) or not isinstance(command, int) or not 0 <= command <= 0xFF:

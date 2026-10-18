@@ -4,6 +4,7 @@ import pytest
 
 from halo_soundbar_service.protocol import (
     AmbientState,
+    AmbientStateCollector,
     LightEntry,
     ParsedFrame,
     PowerTarget,
@@ -12,6 +13,7 @@ from halo_soundbar_service.protocol import (
     build_power_packet,
     build_query_packet,
     parse_frame,
+    style_fingerprint,
 )
 
 
@@ -103,3 +105,72 @@ def test_light_entry_and_ambient_state_are_immutable():
         entry.index = 0x01
     with pytest.raises(TypeError):
         state.entries[0x0C] = entry
+
+
+def _e3_packet(part_number, effect_id, indices, array_index=0x0C, total_parts=2):
+    entries = b"".join(
+        bytes((index, index, index + 1, index + 2, 0x80 + index, 0x10 + index))
+        for index in indices
+    )
+    payload = bytes((total_parts, part_number, array_index, effect_id)) + entries
+    return parse_frame(build_frame(0xE3, payload))
+
+
+def test_collector_reassembles_two_e3_packets_out_of_order():
+    collector = AmbientStateCollector()
+
+    assert collector.feed(_e3_packet(2, 7, range(7, 13))) is None
+    state = collector.feed(_e3_packet(1, 7, range(1, 7)))
+
+    assert state is not None
+    assert state.array_index == 0x0C
+    assert state.effect_id == 7
+    assert set(state.entries) == set(range(0x01, 0x0D))
+    assert state.entries[0x01] == LightEntry(0x01, 1, 2, 3, 0x81, 0x11)
+    assert state.entries[0x0C] == LightEntry(0x0C, 12, 13, 14, 0x8C, 0x1C)
+
+
+def test_collector_discards_stale_generation_after_new_packet_one():
+    collector = AmbientStateCollector()
+
+    collector.feed(_e3_packet(2, 7, range(7, 13)))
+    assert collector.feed(_e3_packet(1, 8, range(1, 7))) is None
+    assert collector.feed(_e3_packet(2, 7, range(7, 13))) is None
+
+    state = collector.feed(_e3_packet(2, 8, range(7, 13)))
+    assert state is not None
+    assert state.effect_id == 8
+
+
+def test_collector_rejects_duplicate_entry_across_parts():
+    collector = AmbientStateCollector()
+    collector.feed(_e3_packet(1, 7, range(1, 7)))
+
+    with pytest.raises(ProtocolError, match="duplicate"):
+        collector.feed(_e3_packet(2, 7, range(6, 13)))
+
+
+def test_collector_never_completes_with_missing_part():
+    collector = AmbientStateCollector()
+
+    assert collector.feed(_e3_packet(1, 7, range(1, 7))) is None
+    assert collector.feed(_e3_packet(1, 7, range(1, 7))) is None
+
+
+def test_collector_rejects_mismatched_effect_or_array():
+    collector = AmbientStateCollector()
+    collector.feed(_e3_packet(1, 7, range(1, 7)))
+    assert collector.feed(_e3_packet(2, 8, range(7, 13))) is None
+
+    with pytest.raises(ProtocolError, match="array"):
+        collector.feed(_e3_packet(2, 7, range(7, 13), array_index=0x0D))
+
+
+def test_style_fingerprint_uses_effect_and_complete_entries_one_through_ten():
+    entries = {
+        index: LightEntry(index, index, index + 1, index + 2, 0x80 + index, 0x10 + index)
+        for index in range(1, 13)
+    }
+    state = AmbientState(array_index=0x0C, effect_id=7, entries=entries)
+
+    assert style_fingerprint(state) == (7, tuple(entries[index] for index in range(1, 11)))
