@@ -224,3 +224,10 @@ Windows Application 事件日志也实际读到三条 Event ID `255`：`19:29:05
 Windows Application 事件日志的独立读回也存在同一对 Event ID `255`，Provider 均为 `HaloSoundbarLightService`：`19:48:41.328 +08:00` 的 message 为 `preshutdown: status=SUCCESS attempts=1`，`19:49:42.122 +08:00` 的 message 为 `startup: status=SUCCESS attempts=1`。事件日志与文件日志的时间、状态和尝试次数一致。
 
 关机过程未观察到异常阻塞；`preshutdown` 成功记录发生在系统停机前，下次启动的 `startup` 成功记录与服务自动运行、硬件 `1/1` 读回相互佐证。此阶段未执行卸载、样式写入或 TempoHub 操作。最终服务保持 `Running`，两路灯保持开启。
+
+## 已接受的剩余风险
+
+2026-10-18 最终审查后，用户明确接受以下两项协议/驱动边界：
+
+- 音箱响应帧没有 transaction/sequence ID。实现会在每轮查询前有界清空队列、新建分包收集器并严格校验内容，但无法绝对证明查询写出后才延迟到达的同灯效分包属于新查询。该歧义最坏可造成一次开关误判，但固定 `0x6B` 白名单仍阻止写入颜色、效果等样式字段。
+- 12 秒是应用层尽力预算，已实测正常 HID 路径在预算内完成。底层 HID 原生调用不都可由 Python 中断；若驱动层永久卡死，可能无法完成该次关灯，但 Windows SCM 配置的 15000 ms PreshutdownTimeout 到期后会继续系统关机。用户选择保留已经真实关机验收的当前架构，不引入需要重新构建、安装和关机验收的 HID 辅助进程。

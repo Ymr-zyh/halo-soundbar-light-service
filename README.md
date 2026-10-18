@@ -68,7 +68,7 @@ print('style_fingerprint:', style_fingerprint(state))
 $LASTEXITCODE
 ```
 
-2026-10-18 本地验证通过：266 个自动化测试、打包 EXE 真实设备开关往返、标准 UAC 管理员安装、SCM 配置、服务启动开灯、手动 STOP 保持灯光，以及不关机的等效 `SvcOtherEx(15, 0, None)` 关灯路径。最终服务 `RUNNING`、Automatic、LocalSystem，两路灯光 `1/1`；各阶段完整快照的效果编号与 `0x01..0x0A` 全条目逐字节相同。初次非管理员令牌的安装阻塞已由标准 UAC 解决；真实 Windows 关机前自动关灯及下次启动自动开灯也已于 2026-10-18 验收通过。详见 [本地验证记录](docs/verification/2026-10-18-local-verification.md#task-11真实关机开机验收)。
+2026-10-18 本地验证通过：已安装 EXE 构建时的 266 个自动化测试、打包 EXE 真实设备开关往返、标准 UAC 管理员安装、SCM 配置、服务启动开灯、手动 STOP 保持灯光，以及不关机的等效 `SvcOtherEx(15, 0, None)` 关灯路径。安全脚本加固后当前套件为 268 个测试。最终服务 `RUNNING`、Automatic、LocalSystem，两路灯光 `1/1`；各阶段完整快照的效果编号与 `0x01..0x0A` 全条目逐字节相同。初次非管理员令牌的安装阻塞已由标准 UAC 解决；真实 Windows 关机前自动关灯及下次启动自动开灯也已于 2026-10-18 验收通过。详见 [本地验证记录](docs/verification/2026-10-18-local-verification.md#task-11真实关机开机验收)。
 
 四条交互诊断命令如下；`off`、`on` 会实际改灯。
 
@@ -98,7 +98,7 @@ $LASTEXITCODE
 
 脚本复制到 `%ProgramFiles%\HaloSoundbarLightService\HaloSoundbarLightService.exe`，调用其 `install` 命令注册服务，再启动并检查 Running。安装失败返回非零；已存在服务时拒绝覆盖，请先按卸载流程处理。若注册成功但启动失败，保留 EXE 与服务以供诊断，不会报告安装成功。
 
-服务名为 `HaloSoundbarLightService`，显示名为 `EDIFIER Halo SoundBar Light Service`，以 LocalSystem 自动启动。启动阶段最多等待设备约 120 秒。失败恢复策略为间隔 60 秒重启，重置周期一天。系统 PRESHUTDOWN 预通知注册超时 15000 毫秒，关灯事务总预算约 12 秒；普通 SHUTDOWN 是幂等回退。手动 `Stop-Service` 或卸载所用的 STOP 只停止服务，不改变灯光；重新 Start-Service 会执行开灯。
+服务名为 `HaloSoundbarLightService`，显示名为 `EDIFIER Halo SoundBar Light Service`，以 LocalSystem 自动启动。启动阶段最多等待设备约 120 秒。失败恢复策略为间隔 60 秒重启，重置周期一天。系统 PRESHUTDOWN 预通知注册超时 15000 毫秒，关灯事务使用约 12 秒的应用层尽力预算；底层 HID 原生调用无法由 Python 截断，因此驱动异常卡死时的系统硬兜底是 SCM 的 15 秒 PreshutdownTimeout，到期后 Windows 继续关机。普通 SHUTDOWN 是幂等回退。手动 `Stop-Service` 或卸载所用的 STOP 只停止服务，不改变灯光；重新 Start-Service 会执行开灯。
 
 EXE 的 `install` 与 `uninstall` 是底层管理员命令：`install` 只注册服务且必须从冻结 EXE 运行；`uninstall` 停止并移除注册且保留日志。推荐使用包装脚本管理固定安装路径。源码入口可用于诊断：`python -m halo_soundbar_service probe`（需先安装运行依赖并设置 `PYTHONPATH=src` 或使用可编辑安装）。
 
