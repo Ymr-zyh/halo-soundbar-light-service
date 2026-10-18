@@ -1,0 +1,7 @@
+.worktrees/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
