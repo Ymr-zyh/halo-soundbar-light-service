@@ -1,0 +1,107 @@
+# Halo Soundbar 氛围灯服务
+
+Windows 服务负责在系统启动时打开主音箱与低音炮氛围灯，并在关机预通知时关闭灯光。仅修改电源开关；尽量保留原有效果、颜色、亮度与速度。每次操作均查询当前状态并核验结果；并发修改或设备异常可能导致操作失败，应查看退出码和日志。
+
+> **真实关机测试必须另行获得人工确认，并先保存全部工作。自动化测试、构建和安装步骤不会主动关机；不要把关机命令加入测试或脚本。**
+
+## 支持的精确设备身份
+
+所有字段必须同时匹配，并且设备必须通过协议状态探测；不会仅凭 VID/PID 选设备。多个匹配设备均响应时会拒绝操作。
+
+| 字段 | 值 |
+| --- | --- |
+| 产品字符串 | `EDIFIER Halo Soundbar Max`（大小写完全一致） |
+| VID / PID | `0x2D99` / `0xA073` |
+| HID interface | `4` |
+| Usage page / usage | `0xFF14` / `0x0001` |
+| Report ID / 状态数组 | `0x2E` / `0x0C` |
+| 控制目标 | 主音箱 `0x0B`、低音炮 `0x0C` |
+
+## 构建
+
+在 Windows 上安装 Python 3.12 或更新版本（建议固定使用相同 Python 小版本、架构和系统构建），从项目根运行：
+
+```powershell
+.\scripts\build.ps1
+```
+
+脚本使用当前 `python` 创建或复用项目内 `.venv`，后续 pip、pytest、PyInstaller 全部使用 `.venv\Scripts\python.exe`。依赖版本固定在 `requirements-build.txt`；脚本先跑全套测试，成功后才清理项目内 `build` 与 `dist` 并构建。脚本拒绝上述输出目录为联接或符号链接。不要在 build/dist 中存放需保留的数据。
+
+产物是单文件 console EXE `dist\HaloSoundbarLightService.exe` 与 `dist\HaloSoundbarLightService.exe.sha256`。spec 以 `src\halo_soundbar_service\__main__.py` 为入口，包含 pywin32 服务组件与 hidapi 隐藏导入。console 模式保留交互命令输出；由 SCM 无参数启动时进入服务分派器。SHA-256 用于核对文件，不代表数字签名。固定依赖支持重建流程；不同 Python、Windows 或工具链环境不保证逐字节相同。
+
+```powershell
+Get-Content .\dist\HaloSoundbarLightService.exe.sha256
+Get-FileHash .\dist\HaloSoundbarLightService.exe -Algorithm SHA256
+```
+
+只运行单测（不接触真实 HID 或 SCM）：
+
+```powershell
+New-Item -ItemType Directory -Path .\build -Force | Out-Null
+python -m pytest -v --basetemp .\build\pytest
+```
+
+## 安装前验证与命令
+
+先连接设备，在交互式 PowerShell 中依次执行 **probe → off → on**，每步成功且观察结果正确后才继续；失败应立即停止安装。`probe` 查询设备和灯光状态，不修改灯光电源。
+
+```powershell
+.\dist\HaloSoundbarLightService.exe probe
+.\dist\HaloSoundbarLightService.exe off
+.\dist\HaloSoundbarLightService.exe on
+```
+
+四条交互诊断命令如下；`off`、`on` 会实际改灯。
+
+| 命令 | 行为 |
+| --- | --- |
+| `probe` | 精确身份探测，输出数组、效果和两路电源状态 |
+| `off` | 关闭主音箱与低音炮氛围灯并读回核验 |
+| `on` | 打开两路氛围灯并读回核验 |
+| `debug` | 前台运行启动开灯逻辑，等待诊断；Ctrl+C 退出且不额外关灯 |
+
+`debug` 不注册服务，也不模拟 Windows PRESHUTDOWN；请先停止已安装服务，避免与自身并发执行。所有命令成功退出码为 `0`；设备缺失、协议异常、核验失败、权限或 SCM 错误等为非零（通常 `1`），参数错误为 `2`。普通命令被 Ctrl+C 中断时为 `130`；`debug` 正常等待期间 Ctrl+C 退出时返回启动操作结果（成功 `0`、失败 `1`）。必须检查退出码，看到进程结束不能视为成功。
+
+```powershell
+.\dist\HaloSoundbarLightService.exe debug
+$LASTEXITCODE
+```
+
+## 管理员安装与服务行为
+
+完成上述验证后，以管理员身份打开 PowerShell，在项目根运行：
+
+```powershell
+.\scripts\install.ps1
+# 可指定另一个已验证的 EXE：
+.\scripts\install.ps1 -SourceExe 'D:\Release\HaloSoundbarLightService.exe'
+```
+
+脚本复制到 `%ProgramFiles%\HaloSoundbarLightService\HaloSoundbarLightService.exe`，调用其 `install` 命令注册服务，再启动并检查 Running。安装失败返回非零；已存在服务时拒绝覆盖，请先按卸载流程处理。若注册成功但启动失败，保留 EXE 与服务以供诊断，不会报告安装成功。
+
+服务名为 `HaloSoundbarLightService`，显示名为 `EDIFIER Halo SoundBar Light Service`，以 LocalSystem 自动启动。启动阶段最多等待设备约 120 秒。失败恢复策略为间隔 60 秒重启，重置周期一天。系统 PRESHUTDOWN 预通知注册超时 15000 毫秒，关灯事务总预算约 12 秒；普通 SHUTDOWN 是幂等回退。手动 `Stop-Service` 或卸载所用的 STOP 只停止服务，不改变灯光；重新 Start-Service 会执行开灯。
+
+EXE 的 `install` 与 `uninstall` 是底层管理员命令：`install` 只注册服务且必须从冻结 EXE 运行；`uninstall` 停止并移除注册且保留日志。推荐使用包装脚本管理固定安装路径。源码入口可用于诊断：`python -m halo_soundbar_service probe`（需先安装运行依赖并设置 `PYTHONPATH=src` 或使用可编辑安装）。
+
+## TempoHub 共存与故障排查
+
+服务按操作打开并及时关闭 HID，不常驻独占句柄，不要求禁用 TempoHub。操作前后查询状态，检测效果或其他风格字段被并发修改时会中止或重试；不能保证与 TempoHub 同时改灯一定成功。先等待 TempoHub 停止调整后重试；若仍失败，可临时关闭 TempoHub 排查，避免两边同时连续操作。
+
+文件日志位于 `%ProgramData%\HaloSoundbarLightService\service.log`，UTF-8，单文件最多 1 MiB，保留 3 份轮转备份；同时尽力写入 Windows“应用程序”事件日志。文件日志无法写入时仍尝试事件日志。检查设备身份、USB 连接、管理员权限和命令错误输出，再检查日志；服务 Running 只表示服务进程在运行，不能代替灯光读回核验。
+
+```powershell
+Get-Service -Name HaloSoundbarLightService
+Get-Content "$env:ProgramData\HaloSoundbarLightService\service.log" -Tail 80
+```
+
+## 卸载与回滚
+
+以管理员身份运行：
+
+```powershell
+.\scripts\uninstall.ps1
+```
+
+脚本只调用已安装 EXE 的 `uninstall`，成功后确认服务不存在，再删除固定 `%ProgramFiles%\HaloSoundbarLightService` 目录。遇到删除待决、权限错误、丢失 EXE 或服务仍存在时返回非零并保留文件；关闭占用服务的管理工具后排查重试。它不删除 ProgramData 日志、项目源码或其他目录。卸载不改变当前灯光，需要恢复亮灯时使用项目保留的 EXE 执行 `on`。
+
+升级或回滚前保留已验证的旧 EXE 与 SHA-256：先卸载，再用 `install.ps1 -SourceExe` 安装目标版本，重新执行 probe/off/on 验证。真实关机与下一次启动的灯光行为须在人明确同意、保存工作后单独验收；单测通过不等于完成硬件或关机验收。
