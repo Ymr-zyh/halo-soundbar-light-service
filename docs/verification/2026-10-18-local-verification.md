@@ -1,6 +1,6 @@
 # 2026-10-18 本地验证记录
 
-结论：**PASS（打包硬件往返、真实服务安装与不关机的等效 PRESHUTDOWN）**。基于协议修复提交 `6f3409b` 清洁构建，266 个自动化测试通过；打包 EXE 在唯一严格身份设备上完成 `1/1 → 0/0 → 1/1`，随后完成标准 UAC 安装、SCM 配置、服务启动、手动 STOP 与等效 control 15 验证。各阶段完整 `AmbientState` 的效果编号及 `0x01..0x0A` 全条目逐字节相同。最终服务 `RUNNING`、Automatic、LocalSystem，两路 `1/1`；未执行真实关机或系统重启。
+结论：**PASS（打包硬件往返、真实服务安装、等效 PRESHUTDOWN 与真实关机/开机）**。基于协议修复提交 `6f3409b` 清洁构建，266 个自动化测试通过；打包 EXE 在唯一严格身份设备上完成 `1/1 → 0/0 → 1/1`，随后完成标准 UAC 安装、SCM 配置、服务启动、手动 STOP、等效 control 15 和真实 Windows 关机/下次开机验证。各阶段完整 `AmbientState` 的效果编号及 `0x01..0x0A` 全条目逐字节相同。最终服务 `RUNNING`、Automatic、LocalSystem，两路 `1/1`。
 
 Task 10 初次安装因执行通道没有管理员令牌而退出 `1`，后由用户批准标准 UAC 安装成功，已解除阻塞。2026-10-18 19:29:02 至 19:29:08 +08:00 完成全部服务验收；`SvcOtherEx(15, 0, None)` 用时 `0.062s`，捕获 `STOP_PENDING` / waitHint `15000`，实际关灯读回成功后才置位 service stop event。文件日志与应用程序事件均记录成功。详见本文末尾记录。
 
@@ -196,4 +196,29 @@ Windows Application 事件日志也实际读到三条 Event ID `255`：`19:29:05
 
 卸载仅做静态核验。管理员在仓库运行 `powershell -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1`；仓库不可用时按 [README 的已安装 EXE 回退命令](../../README.md#卸载与回滚) 执行固定路径 EXE 的 `uninstall`，检查退出 `0` 与 `sc.exe query HaloSoundbarLightService` 返回 `1060`，然后删除经过路径与联接检查的精确 `%ProgramFiles%\HaloSoundbarLightService` 目录。两种方式都保留 `%ProgramData%\HaloSoundbarLightService` 日志，本次未实际卸载或删除文件。
 
-最终状态：已安装服务保留 `RUNNING`、Automatic、LocalSystem，两路灯光 `1/1`、effect `4`，完整样式与基线一致。Task 10 无遗留阻塞；没有实际卸载。真实关机及下一次系统启动属于 Task 11 的独立授权与验收，本次等效路由结果不能替代真实关机测试。
+最终状态：已安装服务保留 `RUNNING`、Automatic、LocalSystem，两路灯光 `1/1`、effect `4`，完整样式与基线一致。Task 10 无遗留阻塞；没有实际卸载。
+
+## Task 11：真实关机/开机验收
+
+用户在观察等效关机和等效开机均正常后，明确回复“继续”授权真实关机。执行标准 Windows `shutdown.exe /s /t 30` 流程，没有使用强制关机参数。用户观察到关机前两路灯熄灭，手动开机进入 Windows 后两路灯自动亮起，并确认“表现正常”。
+
+开机后于 `2026-10-18 19:52:53 +08:00` 使用只读提权检查完成独立读回：
+
+| 项目 | 结果 |
+| --- | --- |
+| 服务状态 | `Running` |
+| 启动类型 / 账户 | `Auto` / `LocalSystem` |
+| 严格设备身份 | `VID 2D99` / `PID A073` / interface `4` / usage page `FF14` / usage `1` |
+| 主音箱 / 低音炮 | `ON / ON`，完整状态 `1/1` |
+| effect | `4` |
+| 样式指纹 SHA-256 | `c6bf1e23e9afef0a2539808528592db61c97de7165a2fbe897a8fa7ec136ee30` |
+| 与 Task 9/10 基线比较 | `STYLE_MATCH=true` |
+
+服务文件日志提供了真实 SCM 关机通知与下次自动启动的成对证据：
+
+```text
+2026-10-18 19:48:41,325 INFO preshutdown: status=SUCCESS attempts=1 detail=
+2026-10-18 19:49:42,118 INFO startup: status=SUCCESS attempts=1 detail=
+```
+
+关机过程未观察到异常阻塞；`preshutdown` 成功记录发生在系统停机前，下次启动的 `startup` 成功记录与服务自动运行、硬件 `1/1` 读回相互佐证。此阶段未执行卸载、样式写入或 TempoHub 操作。最终服务保持 `Running`，两路灯保持开启。
