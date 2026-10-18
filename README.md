@@ -68,7 +68,7 @@ print('style_fingerprint:', style_fingerprint(state))
 $LASTEXITCODE
 ```
 
-2026-10-18 本地验证：修复设备响应帧解析后，266 个自动化测试通过，清洁构建与 SHA-256 核对成功；真实设备唯一严格匹配，打包 EXE 完成 `1/1 → 0/0 → 1/1` 开关往返，三次完整快照的效果编号与 `0x01..0x0A` 全条目逐字节相同，最终两路亮灯已读回确认。本次未安装服务，SCM 与真实关机/下次启动行为尚需单独验收。详见 [本地验证记录](docs/verification/2026-10-18-local-verification.md)。
+2026-10-18 本地验证：修复设备响应帧解析后，266 个自动化测试通过，清洁构建与 SHA-256 核对成功；真实设备唯一严格匹配，打包 EXE 完成 `1/1 → 0/0 → 1/1` 开关往返，三次完整快照的效果编号与 `0x01..0x0A` 全条目逐字节相同，最终两路亮灯已读回确认。随后尝试安装时，执行环境没有管理员令牌，安装脚本退出 `1`；服务未注册，SCM、等效 PRESHUTDOWN 与真实关机/下次启动行为尚未验收。最终只读核验仍为 `1/1` 且样式不变。详见 [本地验证记录](docs/verification/2026-10-18-local-verification.md)。
 
 四条交互诊断命令如下；`off`、`on` 会实际改灯。
 
@@ -118,9 +118,30 @@ Get-Content "$env:ProgramData\HaloSoundbarLightService\service.log" -Tail 80
 以管理员身份运行：
 
 ```powershell
-.\scripts\uninstall.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
 ```
 
 脚本只调用已安装 EXE 的 `uninstall`，成功后确认服务不存在，再删除固定 `%ProgramFiles%\HaloSoundbarLightService` 目录。遇到删除待决、权限错误、丢失 EXE 或服务仍存在时返回非零并保留文件；关闭占用服务的管理工具后排查重试。它不删除 ProgramData 日志、项目源码或其他目录。卸载不改变当前灯光，需要恢复亮灯时使用项目保留的 EXE 执行 `on`。
+
+若仓库已不可用，在管理员 PowerShell 中运行以下已安装 EXE 回退命令。仅在卸载退出 `0`、`sc.exe query` 明确返回 `1060`（服务不存在），且精确安装目录通过检查后删除该目录；删除待决时保留文件并稍后重试：
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$InstallDirectory = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'HaloSoundbarLightService'))
+if ([IO.Path]::GetDirectoryName($InstallDirectory) -ne [IO.Path]::GetFullPath($env:ProgramFiles)) {
+    throw 'Installation directory is outside ProgramFiles.'
+}
+& (Join-Path $InstallDirectory 'HaloSoundbarLightService.exe') uninstall
+if ($LASTEXITCODE -ne 0) { throw 'Service removal failed; files were preserved.' }
+sc.exe query HaloSoundbarLightService
+if ($LASTEXITCODE -ne 1060) { throw 'Service absence was not confirmed; files were preserved.' }
+$Directory = Get-Item -LiteralPath $InstallDirectory -Force
+if (($Directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'Refusing an installation reparse point; files were preserved.'
+}
+Remove-Item -LiteralPath $InstallDirectory -Recurse -Force
+```
+
+两种方式均保留 `%ProgramData%\HaloSoundbarLightService` 下的日志。本次仅审阅卸载逻辑并检查脚本语法，没有实际卸载；安装与等效控制验收受管理员权限阻塞。
 
 升级或回滚前保留已验证的旧 EXE 与 SHA-256：先卸载，再用 `install.ps1 -SourceExe` 安装目标版本，重新执行 probe/off/on 验证。真实关机与下一次启动的灯光行为须在人明确同意、保存工作后单独验收；单测通过不等于完成硬件或关机验收。
