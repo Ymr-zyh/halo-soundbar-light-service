@@ -10,11 +10,21 @@ try {
     if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw 'Run this script in an elevated administrator PowerShell.'
     }
-    if ([string]::IsNullOrWhiteSpace($env:ProgramFiles) -or -not [IO.Path]::IsPathRooted($env:ProgramFiles)) {
-        throw 'ProgramFiles must be an absolute directory.'
-    }
     $ServiceName = 'HaloSoundbarLightService'
-    $InstallDirectory = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'HaloSoundbarLightService'))
+    $KnownFolderProgramFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+    if ([string]::IsNullOrWhiteSpace($KnownFolderProgramFiles) -or -not [IO.Path]::IsPathRooted($KnownFolderProgramFiles)) {
+        throw 'The Windows Program Files known folder is not an absolute directory.'
+    }
+    $ProgramFilesDirectory = [IO.Path]::GetFullPath($KnownFolderProgramFiles)
+    if (-not (Test-Path -LiteralPath $ProgramFilesDirectory -PathType Container)) {
+        throw 'The Windows Program Files known folder does not exist.'
+    }
+    $InstallDirectory = [IO.Path]::GetFullPath((Join-Path $ProgramFilesDirectory 'HaloSoundbarLightService'))
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals(
+        [IO.Path]::GetDirectoryName($InstallDirectory), $ProgramFilesDirectory
+    )) {
+        throw 'Installation directory is outside the Windows Program Files known folder.'
+    }
     $InstalledExe = Join-Path $InstallDirectory 'HaloSoundbarLightService.exe'
     if ([string]::IsNullOrWhiteSpace($SourceExe)) {
         $SourceExe = Join-Path $PSScriptRoot '..\dist\HaloSoundbarLightService.exe'

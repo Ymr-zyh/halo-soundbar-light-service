@@ -10,15 +10,21 @@ try {
     if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw 'Run this script in an elevated administrator PowerShell.'
     }
-    if ([string]::IsNullOrWhiteSpace($env:ProgramFiles) -or -not [IO.Path]::IsPathRooted($env:ProgramFiles)) {
-        throw 'ProgramFiles must be an absolute directory.'
-    }
     $ServiceName = 'HaloSoundbarLightService'
-    $InstallDirectory = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'HaloSoundbarLightService'))
+    $KnownFolderProgramFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+    if ([string]::IsNullOrWhiteSpace($KnownFolderProgramFiles) -or -not [IO.Path]::IsPathRooted($KnownFolderProgramFiles)) {
+        throw 'The Windows Program Files known folder is not an absolute directory.'
+    }
+    $ProgramFilesDirectory = [IO.Path]::GetFullPath($KnownFolderProgramFiles)
+    if (-not (Test-Path -LiteralPath $ProgramFilesDirectory -PathType Container)) {
+        throw 'The Windows Program Files known folder does not exist.'
+    }
+    $InstallDirectory = [IO.Path]::GetFullPath((Join-Path $ProgramFilesDirectory 'HaloSoundbarLightService'))
     $InstalledExe = Join-Path $InstallDirectory 'HaloSoundbarLightService.exe'
-    $ExpectedDirectory = [IO.Path]::GetFullPath($env:ProgramFiles)
-    if ([IO.Path]::GetDirectoryName($InstallDirectory) -ne $ExpectedDirectory) {
-        throw 'Installation directory is outside ProgramFiles.'
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals(
+        [IO.Path]::GetDirectoryName($InstallDirectory), $ProgramFilesDirectory
+    )) {
+        throw 'Installation directory is outside the Windows Program Files known folder.'
     }
     foreach ($Target in @($InstallDirectory, $InstalledExe)) {
         if (Test-Path -LiteralPath $Target) {
@@ -30,6 +36,21 @@ try {
     }
     if (-not (Test-Path -LiteralPath $InstalledExe -PathType Leaf)) {
         throw 'Installed EXE is missing; no files were removed.'
+    }
+    $UnexpectedEntries = @(Get-ChildItem -LiteralPath $InstallDirectory -Force | Where-Object {
+        -not [StringComparer]::OrdinalIgnoreCase.Equals($_.FullName, $InstalledExe)
+    })
+    if ($UnexpectedEntries.Count -ne 0) {
+        throw 'Installation directory contains unexpected entries; no files were removed.'
+    }
+    $ServiceRecord = Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction Stop
+    if ($null -eq $ServiceRecord) {
+        throw 'Service registration is missing; installation files were preserved.'
+    }
+    $RegisteredImagePath = ([string]$ServiceRecord.PathName).Trim()
+    $ExpectedImagePath = '"' + $InstalledExe + '"'
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals($RegisteredImagePath, $ExpectedImagePath)) {
+        throw 'Registered service ImagePath does not match the fixed installed EXE; files were preserved.'
     }
     & $InstalledExe uninstall
     if ($LASTEXITCODE -ne 0) { throw 'Service removal failed; installation files were preserved.' }
@@ -47,7 +68,12 @@ try {
     if (($Directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw 'Installation directory changed into a reparse point; files were preserved.'
     }
-    Remove-Item -LiteralPath $InstallDirectory -Recurse -Force
+    $Executable = Get-Item -LiteralPath $InstalledExe -Force
+    if (($Executable.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Installed EXE changed into a reparse point; files were preserved.'
+    }
+    Remove-Item -LiteralPath $InstalledExe -Force
+    Remove-Item -LiteralPath $InstallDirectory -Force
     Write-Output 'Service and installation directory removed.'
 }
 catch {

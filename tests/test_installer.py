@@ -85,7 +85,8 @@ def test_admin_scripts_restrict_target_and_fail_closed(name):
     script = (PROJECT_ROOT / "scripts" / f"{name}.ps1").read_text(encoding="utf-8")
     assert "$ErrorActionPreference = 'Stop'" in script
     assert "WindowsBuiltInRole]::Administrator" in script
-    assert "Join-Path $env:ProgramFiles 'HaloSoundbarLightService'" in script
+    assert "[Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)" in script
+    assert "$env:ProgramFiles" not in script
     assert "'HaloSoundbarLightService.exe'" in script
     assert "Get-Service -Name $ServiceName -ErrorAction Stop" in script
     assert "$LASTEXITCODE -ne 0" in script
@@ -102,10 +103,30 @@ def test_admin_scripts_restrict_target_and_fail_closed(name):
         assert script.index("$LASTEXITCODE -ne 0") < script.index("Start-Service")
     else:
         assert "& $InstalledExe uninstall" in script
-        assert "Remove-Item -LiteralPath $InstallDirectory -Recurse -Force" in script
+        assert "Remove-Item -LiteralPath $InstalledExe -Force" in script
+        assert "Remove-Item -LiteralPath $InstallDirectory -Force" in script
+        assert "Remove-Item -LiteralPath $InstallDirectory -Recurse" not in script
         assert script.index("& $InstalledExe uninstall") < script.index("$LASTEXITCODE -ne 0")
         assert script.index("$LASTEXITCODE -ne 0") < script.index("Remove-Item")
         assert "Service still exists; installation files were preserved." in script
+
+
+def test_admin_scripts_validate_known_program_files_folder_and_exact_parent():
+    for name in ("install", "uninstall"):
+        script = (PROJECT_ROOT / "scripts" / f"{name}.ps1").read_text(encoding="utf-8")
+        assert "Test-Path -LiteralPath $ProgramFilesDirectory -PathType Container" in script
+        assert "[IO.Path]::GetDirectoryName($InstallDirectory)" in script
+        assert "[StringComparer]::OrdinalIgnoreCase.Equals" in script
+
+
+def test_uninstall_verifies_registered_image_path_before_running_installed_exe():
+    script = (PROJECT_ROOT / "scripts" / "uninstall.ps1").read_text(encoding="utf-8")
+    query = "Get-CimInstance -ClassName Win32_Service"
+    compare = "OrdinalIgnoreCase.Equals($RegisteredImagePath, $ExpectedImagePath)"
+    uninstall = "& $InstalledExe uninstall"
+    assert query in script
+    assert compare in script
+    assert script.index(query) < script.index(compare) < script.index(uninstall)
 
 
 class ScmError(OSError):

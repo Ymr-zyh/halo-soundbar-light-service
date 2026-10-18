@@ -68,7 +68,7 @@ print('style_fingerprint:', style_fingerprint(state))
 $LASTEXITCODE
 ```
 
-2026-10-18 本地验证通过：266 个自动化测试、打包 EXE 真实设备开关往返、标准 UAC 管理员安装、SCM 配置、服务启动开灯、手动 STOP 保持灯光，以及不关机的等效 `SvcOtherEx(15, 0, None)` 关灯路径。最终服务 `RUNNING`、Automatic、LocalSystem，两路灯光 `1/1`；各阶段完整快照的效果编号与 `0x01..0x0A` 全条目逐字节相同。初次非管理员令牌的安装阻塞已由标准 UAC 解决；真实关机与下次系统启动尚未验收。详见 [本地验证记录](docs/verification/2026-10-18-local-verification.md)。
+2026-10-18 本地验证通过：266 个自动化测试、打包 EXE 真实设备开关往返、标准 UAC 管理员安装、SCM 配置、服务启动开灯、手动 STOP 保持灯光，以及不关机的等效 `SvcOtherEx(15, 0, None)` 关灯路径。最终服务 `RUNNING`、Automatic、LocalSystem，两路灯光 `1/1`；各阶段完整快照的效果编号与 `0x01..0x0A` 全条目逐字节相同。初次非管理员令牌的安装阻塞已由标准 UAC 解决；真实 Windows 关机前自动关灯及下次启动自动开灯也已于 2026-10-18 验收通过。详见 [本地验证记录](docs/verification/2026-10-18-local-verification.md#task-11真实关机开机验收)。
 
 四条交互诊断命令如下；`off`、`on` 会实际改灯。
 
@@ -121,17 +121,41 @@ Get-Content "$env:ProgramData\HaloSoundbarLightService\service.log" -Tail 80
 powershell -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
 ```
 
-脚本只调用已安装 EXE 的 `uninstall`，成功后确认服务不存在，再删除固定 `%ProgramFiles%\HaloSoundbarLightService` 目录。遇到删除待决、权限错误、丢失 EXE 或服务仍存在时返回非零并保留文件；关闭占用服务的管理工具后排查重试。它不删除 ProgramData 日志、项目源码或其他目录。卸载不改变当前灯光，需要恢复亮灯时使用项目保留的 EXE 执行 `on`。
+脚本从 Windows Program Files Known Folder API 取得可信根目录，并在卸载前核对 SCM 中服务 `ImagePath` 与固定安装 EXE 完全一致。底层卸载成功并确认服务不存在后，只删除该 EXE 和空的固定安装目录，不执行递归删除。遇到意外目录内容、重解析点、删除待决、权限错误、丢失 EXE、ImagePath 不符或服务仍存在时返回非零并尽量保留文件；关闭占用服务的管理工具后排查重试。它不删除 ProgramData 日志、项目源码或其他目录。卸载不改变当前灯光，需要恢复亮灯时使用项目保留的 EXE 执行 `on`。
 
 若仓库已不可用，在管理员 PowerShell 中运行以下已安装 EXE 回退命令。仅在卸载退出 `0`、`sc.exe query` 明确返回 `1060`（服务不存在），且精确安装目录通过检查后删除该目录；删除待决时保留文件并稍后重试：
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$InstallDirectory = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'HaloSoundbarLightService'))
-if ([IO.Path]::GetDirectoryName($InstallDirectory) -ne [IO.Path]::GetFullPath($env:ProgramFiles)) {
-    throw 'Installation directory is outside ProgramFiles.'
+$KnownFolderProgramFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+if ([string]::IsNullOrWhiteSpace($KnownFolderProgramFiles) -or -not [IO.Path]::IsPathRooted($KnownFolderProgramFiles)) {
+    throw 'The Windows Program Files known folder is invalid.'
 }
-& (Join-Path $InstallDirectory 'HaloSoundbarLightService.exe') uninstall
+$ProgramFilesDirectory = [IO.Path]::GetFullPath($KnownFolderProgramFiles)
+if (-not (Test-Path -LiteralPath $ProgramFilesDirectory -PathType Container)) {
+    throw 'The Windows Program Files known folder does not exist.'
+}
+$InstallDirectory = [IO.Path]::GetFullPath((Join-Path $ProgramFilesDirectory 'HaloSoundbarLightService'))
+if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetDirectoryName($InstallDirectory), $ProgramFilesDirectory)) {
+    throw 'Installation directory is outside the Windows Program Files known folder.'
+}
+$InstalledExe = Join-Path $InstallDirectory 'HaloSoundbarLightService.exe'
+foreach ($Target in @($InstallDirectory, $InstalledExe)) {
+    $Item = Get-Item -LiteralPath $Target -Force
+    if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Refusing an installation reparse point; files were preserved.'
+    }
+}
+$UnexpectedEntries = @(Get-ChildItem -LiteralPath $InstallDirectory -Force | Where-Object {
+    -not [StringComparer]::OrdinalIgnoreCase.Equals($_.FullName, $InstalledExe)
+})
+if ($UnexpectedEntries.Count -ne 0) { throw 'Unexpected installation entries; files were preserved.' }
+$Service = Get-CimInstance -ClassName Win32_Service -Filter "Name='HaloSoundbarLightService'" -ErrorAction Stop
+$ExpectedImagePath = '"' + $InstalledExe + '"'
+if ($null -eq $Service -or -not [StringComparer]::OrdinalIgnoreCase.Equals(([string]$Service.PathName).Trim(), $ExpectedImagePath)) {
+    throw 'Registered service ImagePath does not match the fixed installed EXE; files were preserved.'
+}
+& $InstalledExe uninstall
 if ($LASTEXITCODE -ne 0) { throw 'Service removal failed; files were preserved.' }
 sc.exe query HaloSoundbarLightService
 if ($LASTEXITCODE -ne 1060) { throw 'Service absence was not confirmed; files were preserved.' }
@@ -139,9 +163,10 @@ $Directory = Get-Item -LiteralPath $InstallDirectory -Force
 if (($Directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw 'Refusing an installation reparse point; files were preserved.'
 }
-Remove-Item -LiteralPath $InstallDirectory -Recurse -Force
+Remove-Item -LiteralPath $InstalledExe -Force
+Remove-Item -LiteralPath $InstallDirectory -Force
 ```
 
 两种方式均保留 `%ProgramData%\HaloSoundbarLightService` 下的日志。本次仅审阅卸载逻辑并检查脚本语法，没有实际卸载；已验证服务保留运行。
 
-升级或回滚前保留已验证的旧 EXE 与 SHA-256：先卸载，再用 `install.ps1 -SourceExe` 安装目标版本，重新执行 probe/off/on 验证。真实关机与下一次启动的灯光行为须在人明确同意、保存工作后单独验收；单测通过不等于完成硬件或关机验收。
+升级或回滚前保留已验证的旧 EXE 与 SHA-256：先卸载，再用 `install.ps1 -SourceExe` 安装目标版本，重新执行 probe/off/on 验证。本机真实关机与下一次启动行为已于 2026-10-18 验收通过；未来若重复真实关机测试，仍须另行获得人工确认并先保存全部工作。单测通过不能替代新环境上的硬件或关机验收。
