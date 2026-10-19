@@ -176,3 +176,7 @@ Remove-Item -LiteralPath $InstalledExe -Force
 两种方式均保留 `%ProgramData%\HaloSoundbarLightService` 下的日志。本次仅审阅卸载逻辑并检查脚本语法，没有实际卸载；已验证服务保留运行。
 
 升级或回滚前保留已验证的旧 EXE 与 SHA-256：先卸载，再用 `install.ps1 -SourceExe` 安装目标版本，重新执行 probe/off/on 验证。本机真实关机与下一次启动行为已于 2026-10-18 验收通过；未来若重复真实关机测试，仍须另行获得人工确认并先保存全部工作。单测通过不能替代新环境上的硬件或关机验收。
+
+## 许可证
+
+本项目使用 [MIT License](LICENSE)。
